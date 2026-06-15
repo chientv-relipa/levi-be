@@ -1,0 +1,46 @@
+{
+  "_comment": "Levi analyzer knowledge base. verifiedTargets/scamTargets keyed by Sui address (normalized at load). Pattern lists are case-insensitive regexes matched against the normalized prompt (whitespace-collapsed, lowercased). Semantic paraphrase is handled by the LLM analyzer; these are the deterministic deny signals.",
+  "verifiedTargets": {
+    "0x1": "Move stdlib",
+    "0x2": "Sui Framework",
+    "0x3": "Sui System"
+  },
+  "scamTargets": {
+    "0x000000000000000000000000000000000000000000000000000000000000dead": "Known wallet-drainer address (Levi demo malicious target)"
+  },
+  "promptInjectionPatterns": [
+    "ignore (all |any |the |your )?(previous|prior|above|earlier|preceding) (instruction|instructions|rule|rules|prompt|prompts|context|message|messages)",
+    "disregard (all |any |the |your )?(previous|prior|safety|security|system)? ?(instruction|instructions|rule|rules|guardrail|guardrails|check|checks|policy|policies)",
+    "forget (all |any |everything|the )?(previous|prior|above|your )?(instruction|instructions|rule|rules|context)",
+    "you are (now )?(in )?(a )?(developer|admin|administrator|god|jailbreak|dan|unrestricted|sudo|root) mode",
+    "(enable|activate|enter) (developer|admin|god|jailbreak|dan|sudo|debug) mode",
+    "override (the |your )?(safety|security|guardrail|guardrails|relayer|firewall|policy|policies)",
+    "bypass (the |your )?(firewall|guardrail|guardrails|security|relayer|levi|check|checks|filter|review)",
+    "pretend (you are|to be|that|you can)",
+    "act as (if |though )?(an?|the )?(unrestricted|jailbroken|different|admin)",
+    "(reveal|show|print|leak|expose|repeat|output) (the |your )?(system prompt|system message|instruction|instructions|secret|secrets|private key|api key)",
+    "(this|the) (action|transaction|request) (is|was) (already )?(approved|safe|whitelisted|verified|authorized)",
+    "(return|set|give|output|respond with) (a )?(raw_?score|score|verdict|risk) (of )?(0|zero|low|safe|approved)",
+    "(approve|allow|whitelist) (this|the|my) (action|transaction|request) (without|no) (review|check|analysis|verdict)",
+    "do not (analyze|review|flag|block|escalate|score) (this|the|my)"
+  ],
+  "sensitiveIntentPatterns": [
+    "seed phrase",
+    "secret recovery phrase",
+    "recovery phrase",
+    "mnemonic",
+    "private key",
+    "secret key",
+    "keystore",
+    "approve (unlimited|infinite|max|maximum|all)",
+    "(unlimited|infinite|max|maximum) (approval|allowance)",
+    "set_?approval_?for_?all",
+    "grant (full |complete )?(access|control|approval)",
+    "drain (the |my |your |all )?(wallet|account|funds|treasury|balance|coins)",
+    "transfer (all|everything|entire|the whole|my entire)",
+    "send (all|everything) (my |your |the |of my )?(funds|sui|tokens|coins|balance|assets)",
+    "(sweep|withdraw) (all|everything|the entire)",
+    "empty (the |my |your )?(wallet|account|balance)",
+    "move (all|everything|my entire) (funds|sui|tokens|coins|balance|to)"
+  ]
+}

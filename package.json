@@ -1,0 +1,40 @@
+{
+  "name": "levi-relayer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Levi off-chain security firewall (NestJS) — gas-sponsoring relayer + verdict engine for the Sui contract.",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "start": "node -r @swc-node/register src/main.ts",
+    "start:dev": "node --watch -r @swc-node/register src/main.ts",
+    "test": "vitest run",
+    "set-key": "node -r @swc-node/register scripts/set-encryption-key.ts",
+    "check-sponsored": "node -r @swc-node/register scripts/check-sponsored.ts",
+    "demo": "node -r @swc-node/register scripts/demo-agent.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "@mysten/sui": "^1.30.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-fastify": "^11.0.0",
+    "@noble/ciphers": "^1.0.0",
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.5.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.0.0",
+    "@swc-node/register": "^1.10.0",
+    "@swc/core": "^1.7.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.7.3",
+    "unplugin-swc": "^1.5.1",
+    "vitest": "^2.1.0"
+  }
+}
