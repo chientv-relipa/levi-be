@@ -222,6 +222,135 @@ export class SuiService {
     return { digest: res.digest, agentId };
   }
 
+  // ----- owner escalation resolution (direct, owner-signed) -----
+  // Used in the demo where owner == operator (this.signer). For a separate-wallet owner,
+  // use the sponsored build-approve/build-reject + resolve HTTP flow instead.
+
+  /** Owner approves an escalated action (Escalated → Approved). Signer must be the owner. */
+  async approveAction(p: { agentId: string; actionId: string }): Promise<string> {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${this.pkg}::${MODULES.approveAction}::${MODULES.approveAction}`,
+      arguments: [tx.object(p.agentId), tx.object(p.actionId)],
+    });
+    const res = await this.client.signAndExecuteTransaction({
+      transaction: tx,
+      signer: this.signer,
+      options: { showEffects: true },
+    });
+    await this.client.waitForTransaction({ digest: res.digest });
+    return res.digest;
+  }
+
+  /** Owner rejects an escalated action (Escalated → Rejected, +strike). Signer must be the owner. */
+  async rejectAction(p: { agentId: string; actionId: string }): Promise<string> {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${this.pkg}::${MODULES.rejectAction}::${MODULES.rejectAction}`,
+      arguments: [
+        tx.object(this.cfg.addresses.configId),
+        tx.object(p.agentId),
+        tx.object(p.actionId),
+      ],
+    });
+    const res = await this.client.signAndExecuteTransaction({
+      transaction: tx,
+      signer: this.signer,
+      options: { showEffects: true },
+    });
+    await this.client.waitForTransaction({ digest: res.digest });
+    return res.digest;
+  }
+
+  // ----- owner management: sponsored, owner-signed builders (for the dashboard UI) -----
+  // Same pattern as escalation: relayer builds an UNSIGNED tx (sender = owner, gas = relayer),
+  // the owner signs in the browser, then `agents/execute` broadcasts it.
+
+  /** Allowed moveCall targets for the owner-management `execute` flow. */
+  agentManagementTargets(): string[] {
+    return [
+      `${this.pkg}::${MODULES.registerAgent}::${MODULES.registerAgent}`,
+      `${this.pkg}::${MODULES.activateAgent}::${MODULES.activateAgent}`,
+      `${this.pkg}::${MODULES.deactivateAgent}::${MODULES.deactivateAgent}`,
+      `${this.pkg}::${MODULES.updateAgentProgramTarget}::${MODULES.updateAgentProgramTarget}`,
+    ];
+  }
+
+  private async buildSponsoredOwnerTx(
+    ownerAddress: string,
+    gasBudget: number | undefined,
+    build: (tx: Transaction) => void
+  ): Promise<Uint8Array> {
+    const tx = new Transaction();
+    tx.setSender(ownerAddress);
+    tx.setGasOwner(this.address);
+    tx.setGasBudget(gasBudget ?? 50_000_000);
+    tx.setGasPayment(await this.sponsorGasPayment());
+    build(tx);
+    return tx.build({ client: this.client });
+  }
+
+  /** Build an UNSIGNED, gas-sponsored `register_agent` tx (sender = owner). */
+  buildSponsoredRegister(p: {
+    ownerAddress: string;
+    agentWallet: string;
+    spendLimit: bigint | number;
+    gasBudget?: number;
+  }): Promise<Uint8Array> {
+    return this.buildSponsoredOwnerTx(p.ownerAddress, p.gasBudget, (tx) =>
+      tx.moveCall({
+        target: `${this.pkg}::${MODULES.registerAgent}::${MODULES.registerAgent}`,
+        arguments: [
+          tx.object(this.cfg.addresses.configId),
+          tx.object(this.cfg.addresses.registryId),
+          tx.pure.address(p.agentWallet),
+          tx.pure.u64(p.spendLimit),
+        ],
+      })
+    );
+  }
+
+  /** Build an UNSIGNED, gas-sponsored `activate_agent` tx (sender = owner). */
+  buildSponsoredActivate(p: { ownerAddress: string; agentId: string; gasBudget?: number }): Promise<Uint8Array> {
+    return this.buildSponsoredOwnerTx(p.ownerAddress, p.gasBudget, (tx) =>
+      tx.moveCall({
+        target: `${this.pkg}::${MODULES.activateAgent}::${MODULES.activateAgent}`,
+        arguments: [tx.object(this.cfg.addresses.configId), tx.object(p.agentId)],
+      })
+    );
+  }
+
+  /** Build an UNSIGNED, gas-sponsored `deactivate_agent` tx (sender = owner). */
+  buildSponsoredDeactivate(p: { ownerAddress: string; agentId: string; gasBudget?: number }): Promise<Uint8Array> {
+    return this.buildSponsoredOwnerTx(p.ownerAddress, p.gasBudget, (tx) =>
+      tx.moveCall({
+        target: `${this.pkg}::${MODULES.deactivateAgent}::${MODULES.deactivateAgent}`,
+        arguments: [tx.object(this.cfg.addresses.configId), tx.object(p.agentId)],
+      })
+    );
+  }
+
+  /** Build an UNSIGNED, gas-sponsored `update_agent_program_target` tx (sender = owner). */
+  buildSponsoredUpdateTarget(p: {
+    ownerAddress: string;
+    agentId: string;
+    target: string;
+    allowed: boolean;
+    gasBudget?: number;
+  }): Promise<Uint8Array> {
+    return this.buildSponsoredOwnerTx(p.ownerAddress, p.gasBudget, (tx) =>
+      tx.moveCall({
+        target: `${this.pkg}::${MODULES.updateAgentProgramTarget}::${MODULES.updateAgentProgramTarget}`,
+        arguments: [
+          tx.object(this.cfg.addresses.configId),
+          tx.object(p.agentId),
+          tx.pure.address(p.target),
+          tx.pure.bool(p.allowed),
+        ],
+      })
+    );
+  }
+
   // ----- sponsored transactions (backend pays gas; user is the sender) -----
 
   /** Gas coins owned by the sponsor (backend), for explicit sponsored gas payment. */

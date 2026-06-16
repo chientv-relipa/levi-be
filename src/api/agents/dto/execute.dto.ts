@@ -1,10 +1,10 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { IsNotEmpty, IsString } from "class-validator";
 
-export class SubmitDto {
-  @ApiProperty({ description: "base64 tx bytes returned by build-submit" })
+export class ExecuteDto {
+  @ApiProperty({ description: "base64 tx bytes from a build-* endpoint" })
   @IsString() @IsNotEmpty() transaction!: string;
 
-  @ApiProperty({ description: "Sender (agent) signature over those bytes" })
+  @ApiProperty({ description: "Owner signature over those bytes" })
   @IsString() @IsNotEmpty() signature!: string;
 }

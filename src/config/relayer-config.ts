@@ -16,6 +16,8 @@ export interface RelayerConfig {
   /** Per-IP request cap per window. */
   rateLimitMax: number;
   rateLimitWindowMs: number;
+  /** Allowed CORS origins; undefined = reflect any origin (dev). */
+  corsOrigins?: string[];
   /** Sui signer (bech32 suiprivkey…) — must hold the RelayerCap. */
   operatorSecretKey: string;
   /** x25519 secret (hex) matching the on-chain Config.relayer_encryption_key. */
@@ -42,6 +44,9 @@ export function loadConfig(): RelayerConfig {
     apiKey: process.env.RELAYER_API_KEY || undefined,
     rateLimitMax: Number(process.env.RATE_LIMIT_MAX ?? 120),
     rateLimitWindowMs: Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000),
+    corsOrigins: process.env.CORS_ORIGINS
+      ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
+      : undefined,
     operatorSecretKey: required("OPERATOR_SECRET_KEY"),
     relayerX25519Secret: process.env.RELAYER_X25519_SECRET || undefined,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || undefined,

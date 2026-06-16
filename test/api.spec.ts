@@ -14,6 +14,8 @@ import { AgentsController } from "../src/api/agents/agents.controller";
 import { ActionsController } from "../src/api/actions/actions.controller";
 import { ReasoningController } from "../src/api/reasoning/reasoning.controller";
 import { EscalationController } from "../src/api/escalation/escalation.controller";
+import { StatsController } from "../src/api/stats/stats.controller";
+import { AgentsManagementController } from "../src/api/agents/agents-management.controller";
 import { HealthController } from "../src/api/health.controller";
 import { SuiService } from "../src/sui/sui.service";
 import { EngineService } from "../src/engine/engine.service";
@@ -104,6 +106,9 @@ async function makeApp(over: Record<string, any> = {}): Promise<NestFastifyAppli
     async getAgent(): Promise<LeviAgent> {
       return AGENT;
     },
+    async getAllowedTargets() {
+      return over.allowedTargets ?? [];
+    },
     async getAction(): Promise<LeviAction> {
       if (over.action) return over.action;
       throw new Error("not found");
@@ -129,6 +134,24 @@ async function makeApp(over: Record<string, any> = {}): Promise<NestFastifyAppli
     assertSponsorable() {},
     submitTarget: () => "0xpkg::submit_action::submit_action",
     resolutionTargets: () => ["0xpkg::approve_action::approve_action", "0xpkg::reject_action::reject_action"],
+    agentManagementTargets: () => [
+      "0xpkg::register_agent::register_agent",
+      "0xpkg::activate_agent::activate_agent",
+      "0xpkg::deactivate_agent::deactivate_agent",
+      "0xpkg::update_agent_program_target::update_agent_program_target",
+    ],
+    async buildSponsoredRegister() {
+      return new Uint8Array([7, 7]);
+    },
+    async buildSponsoredActivate() {
+      return new Uint8Array([7, 1]);
+    },
+    async buildSponsoredDeactivate() {
+      return new Uint8Array([7, 2]);
+    },
+    async buildSponsoredUpdateTarget() {
+      return new Uint8Array([7, 3]);
+    },
     async dryRunSponsored() {
       return over.dryRun ?? { success: true };
     },
@@ -141,6 +164,7 @@ async function makeApp(over: Record<string, any> = {}): Promise<NestFastifyAppli
   const fakeStore = {
     getAction: (_id: string) => over.record as ActionRecord | undefined,
     getReasoning: (_h: string) => over.reasoning as string | undefined,
+    listActions: () => (over.records as ActionRecord[] | undefined) ?? [],
     saveAction() {},
   };
 
@@ -151,6 +175,8 @@ async function makeApp(over: Record<string, any> = {}): Promise<NestFastifyAppli
       ActionsController,
       ReasoningController,
       EscalationController,
+      StatsController,
+      AgentsManagementController,
       HealthController,
     ],
     providers: [
@@ -353,5 +379,98 @@ describe("HTTP API", () => {
     expect(body.kind).toBe("approve");
     expect(body.agentId).toBe("0xagent");
     expect(typeof body.transaction).toBe("string");
+  });
+
+  // ----- dashboard endpoints -----
+
+  const rec = (over: Partial<ActionRecord> = {}): ActionRecord => ({
+    actionObjectId: "0xa1",
+    agentId: "0xagent",
+    onchainActionId: "1",
+    targetProgram: "0x2",
+    value: "1000",
+    status: actionStatus.approved,
+    decision: "Approved",
+    rawScore: 1500,
+    analyzer: "claude",
+    reasoningHash: "abcd",
+    createdAt: new Date().toISOString(),
+    ...over,
+  });
+
+  it("GET /api/v1/stats aggregates counts by decision", async () => {
+    const records = [rec({ actionObjectId: "0xa1", decision: "Approved" }), rec({ actionObjectId: "0xa2", decision: "Blocked" }), rec({ actionObjectId: "0xa3", decision: "Blocked", agentId: "0xagent2" })];
+    const res = await (await makeApp({ records })).inject({ url: "/api/v1/stats" });
+    const body = res.json();
+    expect(body.totalActions).toBe(3);
+    expect(body.agents).toBe(2);
+    expect(body.byDecision).toMatchObject({ Approved: 1, Blocked: 2 });
+  });
+
+  it("GET /api/v1/actions lists + filters by decision", async () => {
+    const records = [rec({ actionObjectId: "0xa1", decision: "Approved" }), rec({ actionObjectId: "0xa2", decision: "Blocked" })];
+    const app = await makeApp({ records });
+    const all = await app.inject({ url: "/api/v1/actions" });
+    expect(all.json().total).toBe(2);
+    const blocked = await app.inject({ url: "/api/v1/actions?decision=Blocked" });
+    expect(blocked.json().total).toBe(1);
+    expect(blocked.json().items[0].decision).toBe("Blocked");
+  });
+
+  it("GET /api/v1/agents/:id returns on-chain agent view (no bigint)", async () => {
+    const res = await (await makeApp()).inject({ url: "/api/v1/agents/0xagent" });
+    const body = res.json();
+    expect(body.agentId).toBe("0xagent");
+    expect(body.spendLimit).toBe("1000000"); // bigint → string
+    expect(body.owner).toBe("0xowner");
+    expect(Array.isArray(body.allowedTargets)).toBe(true);
+  });
+
+  it("GET /api/v1/agents lists distinct agents from the action log", async () => {
+    const records = [rec({ agentId: "0xagent" }), rec({ actionObjectId: "0xa2", agentId: "0xagent" })];
+    const res = await (await makeApp({ records })).inject({ url: "/api/v1/agents" });
+    const body = res.json();
+    expect(body.total).toBe(1); // distinct
+    expect(body.items[0].agentId).toBe("0xagent");
+  });
+
+  // ----- owner-management endpoints -----
+
+  it("POST /api/v1/agents/build-register returns an unsigned sponsored tx", async () => {
+    const res = await (await makeApp()).inject({
+      method: "POST",
+      url: "/api/v1/agents/build-register",
+      payload: { ownerAddress: "0xowner", agentWallet: "0xwallet", spendLimit: "1000000" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(typeof body.transaction).toBe("string");
+    expect(body.gasOwner).toBe("0xrelayer");
+  });
+
+  it("POST /api/v1/agents/:id/build-activate returns an unsigned tx", async () => {
+    const res = await (await makeApp()).inject({
+      method: "POST",
+      url: "/api/v1/agents/0xagent/build-activate",
+      payload: { ownerAddress: "0xowner" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().agentId).toBe("0xagent");
+  });
+
+  it("POST /api/v1/agents/execute broadcasts + returns the created agentId on register", async () => {
+    const executeResult = {
+      digest: "0xreg",
+      effects: { status: { status: "success" } },
+      objectChanges: [{ type: "created", objectType: "0xpkg::agent::Agent", objectId: "0xnewagent" }],
+    };
+    const res = await (await makeApp({ executeResult })).inject({
+      method: "POST",
+      url: "/api/v1/agents/execute",
+      payload: { transaction: toBase64(new Uint8Array([1])), signature: "sig" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().agentId).toBe("0xnewagent");
+    expect(res.json().digest).toBe("0xreg");
   });
 });

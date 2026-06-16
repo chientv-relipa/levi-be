@@ -12,6 +12,7 @@ import { AgentsModule } from "./api/agents/agents.module";
 import { ActionsModule } from "./api/actions/actions.module";
 import { ReasoningModule } from "./api/reasoning/reasoning.module";
 import { EscalationModule } from "./api/escalation/escalation.module";
+import { StatsModule } from "./api/stats/stats.module";
 import { HealthController } from "./api/health.controller";
 import { RateLimitGuard } from "./common/guards/rate-limit.guard";
 import { ApiKeyGuard } from "./common/guards/api-key.guard";
@@ -29,6 +30,7 @@ import { ApiKeyGuard } from "./common/guards/api-key.guard";
     ActionsModule,
     ReasoningModule,
     EscalationModule,
+    StatsModule,
   ],
   controllers: [HealthController],
   providers: [

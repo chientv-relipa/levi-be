@@ -16,7 +16,9 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
 } from "@nestjs/common";
+import { ApiOperation, ApiQuery, ApiSecurity, ApiTags } from "@nestjs/swagger";
 import { fromBase64, toBase64 } from "@mysten/sui/utils";
 
 import { SuiService, MAX_SPONSOR_GAS_BUDGET } from "../../sui/sui.service";
@@ -36,6 +38,7 @@ function findCreatedAction(res: { objectChanges?: unknown[] | null }): string | 
   return null;
 }
 
+@ApiTags("actions")
 @Controller("actions")
 export class ActionsController {
   private readonly logger = new Logger("Actions");
@@ -50,6 +53,8 @@ export class ActionsController {
   // Build the unsigned sponsored submit tx for the agent to sign.
   @Post("build-submit")
   @HttpCode(HttpStatus.OK)
+  @ApiSecurity("x-api-key")
+  @ApiOperation({ summary: "Build an unsigned, gas-sponsored submit_action tx for the agent to sign" })
   async buildSubmit(@Body() b: BuildSubmitDto) {
     if (b.gasBudget !== undefined && BigInt(b.gasBudget) > MAX_SPONSOR_GAS_BUDGET) {
       throw new BadRequestException(`gasBudget exceeds sponsor cap ${MAX_SPONSOR_GAS_BUDGET}`);
@@ -88,6 +93,8 @@ export class ActionsController {
   // Co-sign (gas sponsor) + broadcast, then verdict synchronously.
   @Post("submit")
   @HttpCode(HttpStatus.OK)
+  @ApiSecurity("x-api-key")
+  @ApiOperation({ summary: "Co-sign gas + broadcast + return the synchronous verdict" })
   async submit(@Body() b: SubmitDto) {
     const txBytes = fromBase64(b.transaction);
 
@@ -115,8 +122,33 @@ export class ActionsController {
     return { digest: res.digest, actionId: actionObjectId, verdict: verdictView(verdict, this.cfg.publicBaseUrl) };
   }
 
+  // Dashboard: list actions (newest first), optional filters + pagination.
+  @Get()
+  @ApiOperation({ summary: "List actions for the dashboard (newest first; filter by agentId/decision)" })
+  @ApiQuery({ name: "agentId", required: false })
+  @ApiQuery({ name: "decision", required: false, example: "Blocked" })
+  @ApiQuery({ name: "limit", required: false, example: 50 })
+  @ApiQuery({ name: "offset", required: false, example: 0 })
+  listActions(
+    @Query("agentId") agentId?: string,
+    @Query("decision") decision?: string,
+    @Query("limit") limit?: string,
+    @Query("offset") offset?: string
+  ) {
+    let items = this.store.listActions();
+    if (agentId) items = items.filter((a) => a.agentId === agentId);
+    if (decision) items = items.filter((a) => a.decision.toLowerCase() === decision.toLowerCase());
+    items = items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)); // newest first
+    const total = items.length;
+    const off = Math.max(0, Number(offset ?? 0));
+    const lim = Math.min(200, Math.max(1, Number(limit ?? 50)));
+    const page = items.slice(off, off + lim).map((r) => recordView(r, null, this.cfg.publicBaseUrl));
+    return { total, limit: lim, offset: off, items: page };
+  }
+
   // Poll an action: stored record first, fall back to on-chain.
   @Get(":id")
+  @ApiOperation({ summary: "Poll an action's status / decision / reasoning" })
   async getAction(@Param("id") id: string) {
     const rec = this.store.getAction(id);
     if (rec) return recordView(rec, this.store.getReasoning(rec.reasoningHash) ?? null, this.cfg.publicBaseUrl);

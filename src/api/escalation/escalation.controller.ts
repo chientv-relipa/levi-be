@@ -15,6 +15,7 @@ import {
   Param,
   Post,
 } from "@nestjs/common";
+import { ApiOperation, ApiSecurity, ApiTags } from "@nestjs/swagger";
 import { fromBase64, toBase64 } from "@mysten/sui/utils";
 
 import { SuiService } from "../../sui/sui.service";
@@ -23,6 +24,8 @@ import { labelStatus } from "../../common/util/view";
 import { BuildResolutionDto } from "./dto/build-resolution.dto";
 import { ResolveDto } from "./dto/resolve.dto";
 
+@ApiTags("escalation")
+@ApiSecurity("x-api-key")
 @Controller("actions")
 export class EscalationController {
   private readonly logger = new Logger("Escalation");
@@ -42,12 +45,14 @@ export class EscalationController {
 
   @Post(":id/build-approve")
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Build an unsigned approve_action tx for the owner to sign" })
   buildApprove(@Param("id") id: string, @Body() b: BuildResolutionDto) {
     return this.buildResolution("approve", id, b);
   }
 
   @Post(":id/build-reject")
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Build an unsigned reject_action tx for the owner to sign" })
   buildReject(@Param("id") id: string, @Body() b: BuildResolutionDto) {
     return this.buildResolution("reject", id, b);
   }
@@ -71,6 +76,7 @@ export class EscalationController {
   // Broadcast the owner-signed approve/reject tx and reflect the new status.
   @Post(":id/resolve")
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Broadcast the owner-signed approve/reject tx" })
   async resolve(@Param("id") id: string, @Body() b: ResolveDto) {
     const txBytes = fromBase64(b.transaction);
 

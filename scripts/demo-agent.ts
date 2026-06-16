@@ -17,6 +17,7 @@ import { Transaction } from "@mysten/sui/transactions";
 
 import { loadConfig } from "../src/config/relayer-config";
 import { SuiService } from "../src/sui/sui.service";
+import { actionStatus } from "../src/common/levi-sdk";
 import { protect, type ProtectVerdict } from "../client/protect";
 
 const SCAM_TARGET = "0x000000000000000000000000000000000000000000000000000000000000dead";
@@ -53,10 +54,10 @@ async function main() {
   const agentWallet = agent.getPublicKey().toSuiAddress();
   console.log(`agent wallet (no gas): ${agentWallet}`);
 
-  // Register it (owner = operator).
+  // Register it (owner = operator). Small spend limit so the Escalated case can trip it.
   const sui = new SuiService(cfg);
-  const { agentId } = await sui.registerAgent({ agentWallet, spendLimit: 1_000_000_000n });
-  console.log(`registered agentId: ${agentId}`);
+  const { agentId } = await sui.registerAgent({ agentWallet, spendLimit: 10_000n });
+  console.log(`registered agentId: ${agentId} (spendLimit 10000)`);
 
   // CLEAN: read coin balance against the verified framework package.
   const cleanTx = new Transaction();
@@ -73,6 +74,32 @@ async function main() {
   });
   print("CLEAN intent → verified target", clean);
 
+  // ESCALATED: benign intent + verified target, but value over the agent's spend limit →
+  // ambiguous/elevated risk → human review (lands in the 40k–70k band).
+  const escalated = await protect({
+    backendUrl,
+    apiKey: cfg.apiKey,
+    agentKeypair: agent,
+    prompt: "Move 50,000 to my own savings wallet — routine monthly transfer.",
+    targetProgram: VERIFIED_TARGET,
+    value: 50_000n, // > spendLimit 10000
+  });
+  print("ESCALATED intent → over spend limit", escalated);
+
+  // Owner reviews + resolves the escalation (owner = operator in this demo).
+  if (escalated.decision === "Escalated") {
+    console.log("\n  owner reviewing escalated action → approving…");
+    const digest = await sui.approveAction({ agentId, actionId: escalated.actionId });
+    const finalAction = await sui.getAction(escalated.actionId);
+    const label =
+      finalAction.status === actionStatus.approved
+        ? "Approved"
+        : finalAction.status === actionStatus.rejected
+          ? "Rejected"
+          : `status ${finalAction.status}`;
+    console.log(`  owner approved → ${label}  (resolve tx: ${digest})`);
+  }
+
   // MALICIOUS: prompt injection + a known drainer target.
   const malicious = await protect({
     backendUrl,
@@ -86,8 +113,9 @@ async function main() {
 
   console.log("\n────────────────────────────────────────");
   assert.strictEqual(clean.decision, "Approved", `expected clean→Approved, got ${clean.decision}`);
+  assert.strictEqual(escalated.decision, "Escalated", `expected escalated→Escalated, got ${escalated.decision}`);
   assert.strictEqual(malicious.decision, "Blocked", `expected malicious→Blocked, got ${malicious.decision}`);
-  console.log("✅ Levi end-to-end: clean Approved, malicious Blocked.");
+  console.log("✅ Levi end-to-end: clean Approved, escalated Escalated (owner-resolved), malicious Blocked.");
 }
 
 main().catch((e) => {

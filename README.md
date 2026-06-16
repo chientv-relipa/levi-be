@@ -66,6 +66,25 @@ metadata for Nest DI). Tests run on **Vitest** with `unplugin-swc`.
 | `GET /api/v1/reasoning/:hash` | full reasoning text (on-chain stores only the hash) |
 | `POST /api/v1/actions/:id/build-approve` \| `build-reject` | unsigned owner-signed escalation tx |
 | `POST /api/v1/actions/:id/resolve` | broadcast the owner-signed approve/reject |
+| `GET /api/v1/stats` | dashboard: aggregate verdict/agent counts |
+| `GET /api/v1/actions` | dashboard: list actions (filter by `agentId`/`decision`, paginated) |
+| `GET /api/v1/agents` | dashboard: agents seen by the relayer + on-chain reputation |
+| `GET /api/v1/agents/:id` | dashboard: full on-chain agent detail (reputation, stats, allow-list) |
+| `POST /api/v1/agents/build-register` | owner self-service: unsigned, gas-sponsored `register_agent` tx |
+| `POST /api/v1/agents/:id/build-activate` \| `build-deactivate` | unsigned agent lifecycle tx (owner-signed) |
+| `POST /api/v1/agents/:id/build-update-target` | unsigned `update_agent_program_target` tx (toggle allow-list) |
+| `POST /api/v1/agents/execute` | assert + dry-run + co-sign gas + broadcast an owner-signed management tx |
+
+**Owner-management** mirrors escalation: the relayer builds an unsigned tx (`sender = owner`,
+`gas = relayer`), the owner signs it in the browser (`@mysten/dapp-kit`), then `execute` validates
+(only the four management instructions are sponsorable), dry-runs, co-signs gas, and broadcasts.
+`execute` returns the new `agentId` when the tx was a `register_agent`.
+
+**CORS:** enabled for the dashboard. Set `CORS_ORIGINS` (comma-separated) to pin allowed origins;
+unset reflects any origin (local dev). Only `content-type` + `x-api-key` headers are allowed.
+
+**Swagger UI:** `GET /docs` (OpenAPI JSON at `/docs-json`) — interactive API docs, grouped by
+tag, with the `x-api-key` "Authorize" button for the write routes.
 
 ## Setup & run
 

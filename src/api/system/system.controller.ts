@@ -1,10 +1,12 @@
 import { Controller, Get, Inject } from "@nestjs/common";
+import { ApiOperation, ApiTags } from "@nestjs/swagger";
 
 import { SuiService } from "../../sui/sui.service";
 import { RELAYER_CONFIG, type RelayerConfig } from "../../config/relayer-config";
 import { hex0x } from "../../common/util/view";
 
 // GET /api/v1/system/config — everything an agent needs to encrypt + address the contract.
+@ApiTags("system")
 @Controller("system")
 export class SystemController {
   constructor(
@@ -13,6 +15,7 @@ export class SystemController {
   ) {}
 
   @Get("config")
+  @ApiOperation({ summary: "Relayer x25519 pubkey, contract IDs, thresholds (for agents to encrypt + address the contract)" })
   async config() {
     const c = await this.sui.getConfig();
     return {

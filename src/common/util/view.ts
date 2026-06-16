@@ -3,6 +3,7 @@
 
 import { bytesToHex } from "@noble/hashes/utils";
 import { actionStatus } from "../levi-sdk";
+import type { LeviAgent, AllowedTarget } from "../levi-sdk";
 import type { ActionRecord } from "../../store/store.interface";
 import type { EngineResult } from "../../engine/engine.service";
 
@@ -17,6 +18,26 @@ const STATUS_LABEL: Record<number, string> = {
 export const labelStatus = (status: number): string => STATUS_LABEL[status] ?? "Unknown";
 
 export const hex0x = (bytes: Uint8Array): string => `0x${bytesToHex(bytes)}`;
+
+/** JSON view of an on-chain Agent (no bigints) — for the dashboard. */
+export function agentView(id: string, a: LeviAgent, allowedTargets: AllowedTarget[]) {
+  return {
+    agentId: id,
+    agentWallet: a.agentWallet,
+    owner: a.owner,
+    active: a.active,
+    spendLimit: a.spendLimit.toString(),
+    threatScore: a.threatScore,
+    strikes: a.strikes,
+    registeredAt: a.registeredAt.toString(),
+    actionCounter: a.actionCounter.toString(),
+    totalActions: a.totalActions.toString(),
+    totalApproved: a.totalApproved.toString(),
+    totalBlocked: a.totalBlocked.toString(),
+    totalEscalated: a.totalEscalated.toString(),
+    allowedTargets,
+  };
+}
 
 /** Owner-signed escalation links — present only while an action is Escalated. */
 export function escalationLinks(status: number, actionId: string, baseUrl: string) {
