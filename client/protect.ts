@@ -1,5 +1,5 @@
-// Agent-side `protect()` — the only thing an AI agent calls. Bento-style: it talks ONLY to
-// the Levi relayer (never directly to chain), and gets back a synchronous verdict.
+// Agent-side `protect()` — the only thing an AI agent calls. It talks ONLY to the Levi
+// relayer (never directly to chain), and gets back a synchronous verdict.
 //
 // Flow (mirrors the relayer API):
 //   1. GET  /system/config        → relayer x25519 pubkey + IDs
