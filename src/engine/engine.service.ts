@@ -96,10 +96,11 @@ export class EngineService {
   private async doProcess(actionObjectId: string): Promise<EngineResult> {
     const { sui, store } = this;
 
-    // Fast idempotency path: already handled.
+    // Fast idempotency path: already handled. Return the stored reasoning too (whichever path
+    // landed the verdict saved it under its hash) so the caller gets the real text, not a stub.
     if (store.isProcessed(actionObjectId)) {
       const rec = store.getAction(actionObjectId);
-      if (rec) return recordToResult(rec, true);
+      if (rec) return recordToResult(rec, true, store.getReasoning(rec.reasoningHash));
     }
 
     const action = await sui.getAction(actionObjectId);
@@ -108,7 +109,7 @@ export class EngineService {
     if (action.status !== actionStatus.pending) {
       const rec = await this.persistFromChain(action, "(no verdict — action not pending)");
       store.markProcessed(actionObjectId);
-      return recordToResult(rec, true);
+      return recordToResult(rec, true, store.getReasoning(rec.reasoningHash));
     }
 
     const config = await this.getConfig();
