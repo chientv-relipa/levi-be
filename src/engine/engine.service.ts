@@ -151,20 +151,29 @@ export class EngineService {
     } catch (e) {
       const current = await sui.getAction(actionObjectId);
       if (current.status !== actionStatus.pending) {
+        // Lost the race: the other path's verdict_action landed first. We already analyzed this
+        // action, so return OUR OWN analysis (same input → equivalent result), with the final
+        // on-chain status. Save the reasoning so it's fetchable by hash too. No dependency on the
+        // winner's record/timing.
+        const reasoningHash = bytesToHex(blake3(new TextEncoder().encode(result.reasoning)));
+        store.saveReasoning(reasoningHash, result.reasoning);
+        const record: ActionRecord = {
+          actionObjectId,
+          agentId: action.agent,
+          onchainActionId: action.actionId.toString(),
+          targetProgram: action.targetProgram,
+          value: action.value.toString(),
+          status: current.status,
+          decision: STATUS_LABEL[current.status] ?? classifyScore(result.rawScore, thresholds),
+          rawScore: result.rawScore,
+          analyzer: result.analyzer,
+          reasoningHash,
+          createdAt: new Date().toISOString(),
+          processedAt: new Date().toISOString(),
+        };
+        store.saveAction(record);
         store.markProcessed(actionObjectId);
-        // The other path landed the verdict; it saves the full record (real analyzer + reasoning)
-        // a moment after its tx finalizes. Wait briefly for that so we return the real result
-        // instead of a stub.
-        for (let i = 0; i < 8; i++) {
-          const existing = store.getAction(actionObjectId);
-          if (existing && !existing.analyzer.startsWith("(")) {
-            return recordToResult(existing, true, store.getReasoning(existing.reasoningHash));
-          }
-          await new Promise((r) => setTimeout(r, 250));
-        }
-        // Fallback: reconstruct from chain (reasoning available via /reasoning/:hash once saved).
-        const rec = await this.persistFromChain(current, "(verdict already landed)");
-        return recordToResult(rec, true, store.getReasoning(rec.reasoningHash));
+        return recordToResult(record, false, result.reasoning);
       }
       throw e; // genuine fault (RPC, operator key, …) — let the caller retry
     }
