@@ -150,8 +150,14 @@ export class EngineService {
     } catch (e) {
       const current = await sui.getAction(actionObjectId);
       if (current.status !== actionStatus.pending) {
-        const rec = await this.persistFromChain(current, "(verdict already landed by another path)");
         store.markProcessed(actionObjectId);
+        // The other path already saved the full record (real analyzer + reasoning) — return it.
+        const existing = store.getAction(actionObjectId);
+        if (existing) {
+          return recordToResult(existing, true, store.getReasoning(existing.reasoningHash));
+        }
+        // Fallback: reconstruct from chain (reasoning available via /reasoning/:hash).
+        const rec = await this.persistFromChain(current, "(verdict already landed)");
         return recordToResult(rec, true);
       }
       throw e; // genuine fault (RPC, operator key, …) — let the caller retry
