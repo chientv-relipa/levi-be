@@ -48,11 +48,45 @@ export class SuiService {
   readonly signer: Ed25519Keypair;
   readonly address: string;
 
+  /** Serializes operator-signed transactions. They all share the operator's gas coin (and
+   *  verdict_action also the RelayerCap) — owned objects that can only be used by one tx at a
+   *  time. Running two concurrently (e.g. the Watcher landing a verdict while the API submit
+   *  lands another) equivocates the object and validators reject it ("already locked by a
+   *  different transaction"). This queue runs them one at a time, each waiting for the previous
+   *  to finalize so the next sees fresh object versions. */
+  private txLock: Promise<unknown> = Promise.resolve();
+
   constructor(@Inject(RELAYER_CONFIG) private readonly cfg: RelayerConfig) {
     this.client = new SuiClient({ url: cfg.rpcUrl });
     const { secretKey } = decodeSuiPrivateKey(cfg.operatorSecretKey);
     this.signer = Ed25519Keypair.fromSecretKey(secretKey);
     this.address = this.signer.getPublicKey().toSuiAddress();
+  }
+
+  /** Run `fn` after all previously-queued operator transactions have settled. */
+  private withTxLock<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.txLock.then(fn, fn);
+    this.txLock = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  /** Sign + execute + await an operator transaction, serialized via the tx lock. */
+  private execTx(
+    tx: Transaction,
+    options: { showEffects?: boolean; showObjectChanges?: boolean },
+  ): Promise<SuiTransactionBlockResponse> {
+    return this.withTxLock(async () => {
+      const res = await this.client.signAndExecuteTransaction({
+        transaction: tx,
+        signer: this.signer,
+        options,
+      });
+      await this.client.waitForTransaction({ digest: res.digest });
+      return res;
+    });
   }
 
   get pkg(): string {
@@ -211,12 +245,7 @@ export class SuiService {
         tx.pure.vector("u8", reasoningHash),
       ],
     });
-    const res = await this.client.signAndExecuteTransaction({
-      transaction: tx,
-      signer: this.signer,
-      options: { showEffects: true },
-    });
-    await this.client.waitForTransaction({ digest: res.digest });
+    const res = await this.execTx(tx, { showEffects: true });
     return res.digest;
   }
 
@@ -237,12 +266,7 @@ export class SuiService {
         tx.pure.u64(p.spendLimit),
       ],
     });
-    const res = await this.client.signAndExecuteTransaction({
-      transaction: tx,
-      signer: this.signer,
-      options: { showObjectChanges: true },
-    });
-    await this.client.waitForTransaction({ digest: res.digest });
+    const res = await this.execTx(tx, { showObjectChanges: true });
     const agentId = findCreatedObjectId(res, "::agent::Agent");
     if (!agentId) throw new Error("register_agent: Agent object not found in tx effects");
     return { digest: res.digest, agentId };
@@ -259,12 +283,7 @@ export class SuiService {
       target: `${this.pkg}::${MODULES.approveAction}::${MODULES.approveAction}`,
       arguments: [tx.object(p.agentId), tx.object(p.actionId)],
     });
-    const res = await this.client.signAndExecuteTransaction({
-      transaction: tx,
-      signer: this.signer,
-      options: { showEffects: true },
-    });
-    await this.client.waitForTransaction({ digest: res.digest });
+    const res = await this.execTx(tx, { showEffects: true });
     return res.digest;
   }
 
@@ -279,12 +298,7 @@ export class SuiService {
         tx.object(p.actionId),
       ],
     });
-    const res = await this.client.signAndExecuteTransaction({
-      transaction: tx,
-      signer: this.signer,
-      options: { showEffects: true },
-    });
-    await this.client.waitForTransaction({ digest: res.digest });
+    const res = await this.execTx(tx, { showEffects: true });
     return res.digest;
   }
 
@@ -543,13 +557,16 @@ export class SuiService {
         ? [senderSignature]
         : [senderSignature, (await this.signer.signTransaction(txBytes)).signature];
 
-    const res = await this.client.executeTransactionBlock({
-      transactionBlock: txBytes,
-      signature,
-      options: { showEffects: true, showObjectChanges: true, showEvents: true },
+    // Serialized: these sponsored txs are paid by the operator's gas coin (shared owned object).
+    return this.withTxLock(async () => {
+      const res = await this.client.executeTransactionBlock({
+        transactionBlock: txBytes,
+        signature,
+        options: { showEffects: true, showObjectChanges: true, showEvents: true },
+      });
+      await this.client.waitForTransaction({ digest: res.digest });
+      return res;
     });
-    await this.client.waitForTransaction({ digest: res.digest });
-    return res;
   }
 
   // ----- admin: set relayer encryption key (update_config) -----
@@ -577,12 +594,7 @@ export class SuiService {
         tx.pure(bcs.option(bcs.u16()).serialize(null)), // ema_scale
       ],
     });
-    const res = await this.client.signAndExecuteTransaction({
-      transaction: tx,
-      signer: this.signer,
-      options: { showEffects: true },
-    });
-    await this.client.waitForTransaction({ digest: res.digest });
+    const res = await this.execTx(tx, { showEffects: true });
     return res.digest;
   }
 }
