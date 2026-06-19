@@ -152,14 +152,19 @@ export class EngineService {
       const current = await sui.getAction(actionObjectId);
       if (current.status !== actionStatus.pending) {
         store.markProcessed(actionObjectId);
-        // The other path already saved the full record (real analyzer + reasoning) — return it.
-        const existing = store.getAction(actionObjectId);
-        if (existing) {
-          return recordToResult(existing, true, store.getReasoning(existing.reasoningHash));
+        // The other path landed the verdict; it saves the full record (real analyzer + reasoning)
+        // a moment after its tx finalizes. Wait briefly for that so we return the real result
+        // instead of a stub.
+        for (let i = 0; i < 8; i++) {
+          const existing = store.getAction(actionObjectId);
+          if (existing && !existing.analyzer.startsWith("(")) {
+            return recordToResult(existing, true, store.getReasoning(existing.reasoningHash));
+          }
+          await new Promise((r) => setTimeout(r, 250));
         }
-        // Fallback: reconstruct from chain (reasoning available via /reasoning/:hash).
+        // Fallback: reconstruct from chain (reasoning available via /reasoning/:hash once saved).
         const rec = await this.persistFromChain(current, "(verdict already landed)");
-        return recordToResult(rec, true);
+        return recordToResult(rec, true, store.getReasoning(rec.reasoningHash));
       }
       throw e; // genuine fault (RPC, operator key, …) — let the caller retry
     }
