@@ -18,15 +18,7 @@ import { Transaction } from "@mysten/sui/transactions";
 import { loadConfig } from "../src/config/relayer-config";
 import { SuiService } from "../src/sui/sui.service";
 
-const CONSTANTS_PATH = resolve(
-  __dirname,
-  "..",
-  "..",
-  "sui-contract",
-  "sdk",
-  "common",
-  "constants.ts",
-);
+const CONSTANTS_PATH = resolve(__dirname, "..", "src", "sdk", "common", "constants.ts");
 
 async function main() {
   const cfg = loadConfig();
