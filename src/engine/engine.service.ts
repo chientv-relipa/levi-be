@@ -135,12 +135,27 @@ export class EngineService {
     const result = analysis instanceof Promise ? await analysis : analysis;
 
     // Land the verdict on-chain (RelayerCap). reasoning_hash on-chain == blake3(reasoning).
-    const verdictDigest = await sui.submitVerdict({
-      agentId: action.agent,
-      actionId: actionObjectId,
-      rawScore: result.rawScore,
-      reasoning: result.reasoning,
-    });
+    // Race-safe: the Watcher and the API submit can both reach a fresh action; whoever lands the
+    // verdict first wins, and the other's verdict_action aborts with `assert_pending` (the action
+    // is no longer pending). Treat that as "already decided" — re-read and return the landed
+    // verdict instead of surfacing an error to the caller.
+    let verdictDigest: string;
+    try {
+      verdictDigest = await sui.submitVerdict({
+        agentId: action.agent,
+        actionId: actionObjectId,
+        rawScore: result.rawScore,
+        reasoning: result.reasoning,
+      });
+    } catch (e) {
+      const current = await sui.getAction(actionObjectId);
+      if (current.status !== actionStatus.pending) {
+        const rec = await this.persistFromChain(current, "(verdict already landed by another path)");
+        store.markProcessed(actionObjectId);
+        return recordToResult(rec, true);
+      }
+      throw e; // genuine fault (RPC, operator key, …) — let the caller retry
+    }
 
     const reasoningHash = bytesToHex(blake3(new TextEncoder().encode(result.reasoning)));
 
