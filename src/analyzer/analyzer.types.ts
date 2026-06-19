@@ -58,6 +58,8 @@ export interface AnalysisInput {
   allowedTargets: AllowedTarget[];
   thresholds: ScoreThresholds;
   knowledgeBase: KnowledgeBase;
+  /** Policy ids the operator has disabled — the matching guard is skipped at scoring time. */
+  disabledPolicies?: ReadonlySet<string>;
 }
 
 export interface AnalysisResult {

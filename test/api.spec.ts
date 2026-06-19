@@ -15,6 +15,8 @@ import { ActionsController } from "../src/api/actions/actions.controller";
 import { ReasoningController } from "../src/api/reasoning/reasoning.controller";
 import { EscalationController } from "../src/api/escalation/escalation.controller";
 import { StatsController } from "../src/api/stats/stats.controller";
+import { ApprovalsController } from "../src/api/approvals/approvals.controller";
+import { PoliciesController } from "../src/api/policies/policies.controller";
 import { AgentsManagementController } from "../src/api/agents/agents-management.controller";
 import { HealthController } from "../src/api/health.controller";
 import { SuiService } from "../src/sui/sui.service";
@@ -106,6 +108,9 @@ async function makeApp(over: Record<string, any> = {}): Promise<NestFastifyAppli
     async getAgent(): Promise<LeviAgent> {
       return AGENT;
     },
+    async getAgentIdsByOwner(owner: string) {
+      return owner === AGENT.owner ? ["0xagent"] : [];
+    },
     async getAllowedTargets() {
       return over.allowedTargets ?? [];
     },
@@ -161,11 +166,41 @@ async function makeApp(over: Record<string, any> = {}): Promise<NestFastifyAppli
       return over.verdict ?? approvedVerdict();
     },
   };
+  const agentNames: Record<string, string> = {};
+  const disabledPolicies = new Set<string>();
+  const removedPolicies = new Set<string>();
+  const customPolicies: Array<{ id: string; [k: string]: unknown }> = [];
   const fakeStore = {
     getAction: (_id: string) => over.record as ActionRecord | undefined,
     getReasoning: (_h: string) => over.reasoning as string | undefined,
     listActions: () => (over.records as ActionRecord[] | undefined) ?? [],
     saveAction() {},
+    setAgentName: (id: string, name: string) => {
+      agentNames[id] = name;
+    },
+    getAgentName: (id: string) => agentNames[id],
+    setAgentArchived: () => {},
+    isAgentArchived: () => false,
+    setPolicyEnabled: (id: string, enabled: boolean) => {
+      if (enabled) disabledPolicies.delete(id);
+      else disabledPolicies.add(id);
+    },
+    isPolicyDisabled: (id: string) => disabledPolicies.has(id),
+    listCustomPolicies: () => customPolicies,
+    addCustomPolicy: (p: { id: string }) => {
+      customPolicies.push(p);
+    },
+    deleteCustomPolicy: (id: string) => {
+      const i = customPolicies.findIndex((p) => p.id === id);
+      if (i < 0) return false;
+      customPolicies.splice(i, 1);
+      return true;
+    },
+    setPolicyRemoved: (id: string, removed: boolean) => {
+      if (removed) removedPolicies.add(id);
+      else removedPolicies.delete(id);
+    },
+    isPolicyRemoved: (id: string) => removedPolicies.has(id),
   };
 
   const moduleRef = await Test.createTestingModule({
@@ -176,6 +211,8 @@ async function makeApp(over: Record<string, any> = {}): Promise<NestFastifyAppli
       ReasoningController,
       EscalationController,
       StatsController,
+      ApprovalsController,
+      PoliciesController,
       AgentsManagementController,
       HealthController,
     ],
@@ -407,6 +444,96 @@ describe("HTTP API", () => {
     expect(body.byDecision).toMatchObject({ Approved: 1, Blocked: 2 });
   });
 
+  it("GET /api/v1/policies returns the firewall policy catalog + counts", async () => {
+    const res = await (await makeApp()).inject({ url: "/api/v1/policies" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.activePolicies).toBeGreaterThan(0);
+    expect(body.totalRules).toBeGreaterThan(0);
+    expect(body.criticalActive).toBeGreaterThan(0);
+    expect(Array.isArray(body.policies)).toBe(true);
+    expect(body.policies[0]).toHaveProperty("rules");
+    expect(body.policies[0]).toHaveProperty("severity");
+  });
+
+  it("GET /api/v1/policies/library returns reusable rule templates", async () => {
+    const res = await (await makeApp()).inject({ url: "/api/v1/policies/library" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().rules.length).toBeGreaterThan(0);
+    expect(res.json().rules[0]).toHaveProperty("severity");
+  });
+
+  it("POST + DELETE /api/v1/policies manages a custom policy", async () => {
+    const app = await makeApp();
+    const before = (await app.inject({ url: "/api/v1/policies" })).json();
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/policies",
+      payload: { name: "SQL Protection", severity: "HIGH", description: "block sqli" },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id;
+
+    const after = (await app.inject({ url: "/api/v1/policies" })).json();
+    expect(after.activePolicies).toBe(before.activePolicies + 1);
+    const mine = after.policies.find((p: { id: string }) => p.id === id);
+    expect(mine.custom).toBe(true);
+    expect(mine.name).toBe("SQL Protection");
+
+    const del = await app.inject({ method: "DELETE", url: `/api/v1/policies/${id}` });
+    expect(del.statusCode).toBe(200);
+    const final = (await app.inject({ url: "/api/v1/policies" })).json();
+    expect(final.activePolicies).toBe(before.activePolicies);
+  });
+
+  it("DELETE /api/v1/policies/:id on a built-in policy removes + hides it", async () => {
+    const app = await makeApp();
+    const before = (await app.inject({ url: "/api/v1/policies" })).json();
+    const res = await app.inject({ method: "DELETE", url: "/api/v1/policies/scam-target-guard" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().removed).toBe(true);
+    const after = (await app.inject({ url: "/api/v1/policies" })).json();
+    expect(after.policies.find((p: { id: string }) => p.id === "scam-target-guard")).toBeUndefined();
+    expect(after.activePolicies).toBe(before.activePolicies - 1);
+  });
+
+  it("POST /api/v1/policies/:id toggles a policy and updates the counts", async () => {
+    const app = await makeApp();
+    const before = (await app.inject({ url: "/api/v1/policies" })).json();
+    const target = before.policies.find((p: { severity: string }) => p.severity === "CRITICAL");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/policies/${target.id}`,
+      payload: { active: false },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = (await app.inject({ url: "/api/v1/policies" })).json();
+    expect(after.activePolicies).toBe(before.activePolicies - 1);
+    expect(after.criticalActive).toBe(before.criticalActive - 1);
+    expect(after.totalRules).toBe(before.totalRules - target.rules.length);
+    expect(after.policies.find((p: { id: string }) => p.id === target.id).active).toBe(false);
+  });
+
+  it("GET /api/v1/approvals returns the escalation queue + counts", async () => {
+    const records = [
+      rec({ actionObjectId: "0xa1", decision: "Approved" }),
+      rec({ actionObjectId: "0xa2", decision: "Escalated", rawScore: 65_000 }),
+      rec({ actionObjectId: "0xa3", decision: "Escalated", rawScore: 45_000 }),
+      rec({ actionObjectId: "0xa4", decision: "Blocked" }),
+    ];
+    const res = await (await makeApp({ records })).inject({ url: "/api/v1/approvals" });
+    const body = res.json();
+    expect(body.pending).toBe(2);
+    expect(body.critical).toBe(1); // only the 65k one
+    expect(body.approved).toBe(1);
+    expect(body.blocked).toBe(1);
+    expect(body.items).toHaveLength(2);
+    expect(body.items.every((i: { decision: string }) => i.decision === "Escalated")).toBe(true);
+  });
+
   it("GET /api/v1/actions lists + filters by decision", async () => {
     const records = [rec({ actionObjectId: "0xa1", decision: "Approved" }), rec({ actionObjectId: "0xa2", decision: "Blocked" })];
     const app = await makeApp({ records });
@@ -434,18 +561,51 @@ describe("HTTP API", () => {
     expect(body.items[0].agentId).toBe("0xagent");
   });
 
+  it("POST /api/v1/agents/:id/name sets the off-chain display name", async () => {
+    const app = await makeApp();
+    const set = await app.inject({
+      method: "POST",
+      url: "/api/v1/agents/0xagent/name",
+      payload: { name: "Trading Bot" },
+    });
+    expect(set.statusCode).toBe(200);
+    expect(set.json().name).toBe("Trading Bot");
+
+    const got = await app.inject({ url: "/api/v1/agents/0xagent" });
+    expect(got.json().name).toBe("Trading Bot");
+  });
+
+  it("GET /api/v1/agents?owner= lists agents owned by a wallet (from RegisterAgent events)", async () => {
+    const res = await (await makeApp()).inject({ url: "/api/v1/agents?owner=0xowner" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.items[0].agentId).toBe("0xagent");
+    expect(body.items[0].owner).toBe("0xowner");
+  });
+
   // ----- owner-management endpoints -----
 
   it("POST /api/v1/agents/build-register returns an unsigned sponsored tx", async () => {
     const res = await (await makeApp()).inject({
       method: "POST",
       url: "/api/v1/agents/build-register",
-      payload: { ownerAddress: "0xowner", agentWallet: "0xwallet", spendLimit: "1000000" },
+      // 0xnewwallet is NOT in the registry (fake getAgentIdByWallet → null).
+      payload: { ownerAddress: "0xowner", agentWallet: "0xnewwallet", spendLimit: "1000000" },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(typeof body.transaction).toBe("string");
     expect(body.gasOwner).toBe("0xrelayer");
+  });
+
+  it("POST /api/v1/agents/build-register rejects an already-registered wallet", async () => {
+    const res = await (await makeApp()).inject({
+      method: "POST",
+      url: "/api/v1/agents/build-register",
+      payload: { ownerAddress: "0xowner", agentWallet: "0xwallet", spendLimit: "1000000" },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it("POST /api/v1/agents/:id/build-activate returns an unsigned tx", async () => {

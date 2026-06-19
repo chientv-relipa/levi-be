@@ -21,6 +21,7 @@ import {
   matchInjection,
   matchSensitiveIntent,
 } from "./knowledge-base.util";
+import { POLICY_IDS } from "../common/policy-ids";
 
 const WEIGHTS = {
   baseline: 2_000,
@@ -43,6 +44,7 @@ export function analyzeRuleBased(input: AnalysisInput): AnalysisResult {
   const kb = input.knowledgeBase;
   const findings: string[] = [];
   let score = WEIGHTS.baseline;
+  const off = (id: string) => input.disabledPolicies?.has(id) ?? false;
 
   const target = normalizeAddr(input.targetProgram);
   const txPackages = input.tx.moveCalls.map((m) => normalizeAddr(m.package)).filter(Boolean);
@@ -52,23 +54,25 @@ export function analyzeRuleBased(input: AnalysisInput): AnalysisResult {
   const verifiedLabel = isVerifiedTarget(kb, target);
 
   // 1) Known scam / drainer target (declared or invoked).
-  const scams = unique([target, ...txPackages])
-    .map((a) => [a, scamReason(kb, a)] as const)
-    .filter(([, r]) => r);
+  const scams = off(POLICY_IDS.scamTarget)
+    ? []
+    : unique([target, ...txPackages])
+        .map((a) => [a, scamReason(kb, a)] as const)
+        .filter(([, r]) => r);
   if (scams.length) {
     score += WEIGHTS.scamTarget;
     findings.push(`Target ${scams[0][0]} is flagged malicious: ${scams[0][1]}`);
   }
 
   // 2) Prompt injection against the relayer/LLM.
-  const inj = matchInjection(kb, input.prompt);
+  const inj = off(POLICY_IDS.promptInjection) ? [] : matchInjection(kb, input.prompt);
   if (inj.length) {
     score += WEIGHTS.promptInjection;
     findings.push(`Prompt-injection pattern(s) detected: ${inj.join("; ")}`);
   }
 
   // 3) Sensitive / wallet-draining intent.
-  const sens = matchSensitiveIntent(kb, input.prompt);
+  const sens = off(POLICY_IDS.sensitiveIntent) ? [] : matchSensitiveIntent(kb, input.prompt);
   if (sens.length) {
     score += WEIGHTS.sensitiveIntent;
     findings.push(`Sensitive/high-risk intent: ${sens.join("; ")}`);
@@ -80,7 +84,7 @@ export function analyzeRuleBased(input: AnalysisInput): AnalysisResult {
   const observed = input.tx.splitAmounts ?? [];
   const observedMax = observed.reduce((m, a) => (a > m ? a : m), 0n);
   const effectiveValue = observedMax > input.value ? observedMax : input.value;
-  if (input.agent.spendLimit > 0n && effectiveValue > input.agent.spendLimit) {
+  if (!off(POLICY_IDS.spendLimit) && input.agent.spendLimit > 0n && effectiveValue > input.agent.spendLimit) {
     score += WEIGHTS.overSpendLimit;
     findings.push(`Value ${effectiveValue} exceeds agent spend limit ${input.agent.spendLimit}`);
   }
@@ -96,7 +100,7 @@ export function analyzeRuleBased(input: AnalysisInput): AnalysisResult {
   const unknownExecs = executables.filter(
     (p) => !isVerifiedTarget(kb, p) && !allowed.has(p) && !scamReason(kb, p)
   );
-  if (unknownExecs.length) {
+  if (!off(POLICY_IDS.verifiedAllowlist) && unknownExecs.length) {
     score += WEIGHTS.unknownTarget;
     findings.push(`Unverified target/package(s) (not verified, not allow-listed): ${unknownExecs.join(", ")}`);
   }

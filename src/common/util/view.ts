@@ -20,9 +20,15 @@ export const labelStatus = (status: number): string => STATUS_LABEL[status] ?? "
 export const hex0x = (bytes: Uint8Array): string => `0x${bytesToHex(bytes)}`;
 
 /** JSON view of an on-chain Agent (no bigints) — for the dashboard. */
-export function agentView(id: string, a: LeviAgent, allowedTargets: AllowedTarget[]) {
+export function agentView(
+  id: string,
+  a: LeviAgent,
+  allowedTargets: AllowedTarget[],
+  name?: string | null,
+) {
   return {
     agentId: id,
+    name: name ?? null,
     agentWallet: a.agentWallet,
     owner: a.owner,
     active: a.active,
@@ -65,6 +71,7 @@ export function recordView(rec: ActionRecord, reasoning: string | null, baseUrl:
     reasoningHash: rec.reasoningHash,
     verdictDigest: rec.verdictDigest ?? null,
     reasoning,
+    createdAt: rec.createdAt,
     escalation: escalationLinks(rec.status, rec.actionObjectId, baseUrl),
   };
 }

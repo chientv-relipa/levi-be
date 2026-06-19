@@ -24,6 +24,7 @@ import { AnalyzerService } from "../analyzer/analyzer.service";
 import { KnowledgeBaseService } from "../analyzer/knowledge-base.service";
 import { classifyScore, type AnalysisInput, type AnalysisResult } from "../analyzer/analyzer.types";
 import { RELAYER_STORE, type RelayerStore, type ActionRecord } from "../store/store.interface";
+import { POLICY_IDS, ALL_POLICY_IDS } from "../common/policy-ids";
 
 /** The subset of SuiService the engine needs (kept narrow so the engine is unit-testable). */
 export interface EngineSui {
@@ -116,8 +117,21 @@ export class EngineService {
     const agent = await sui.getAgent(action.agent);
     const allowedTargets = await sui.getAllowedTargets(action.agent);
 
+    // Disabled/removed policies — the matching guard is skipped at scoring time. We union the
+    // global overlay with this agent's per-agent overlay, so a guard turned off for this agent
+    // (workspace model) is skipped only for its own actions.
+    const disabledPolicies = new Set(
+      ALL_POLICY_IDS.filter(
+        (id) =>
+          store.isPolicyDisabled(id) ||
+          store.isPolicyRemoved(id) ||
+          store.isAgentPolicyDisabled(action.agent, id) ||
+          store.isAgentPolicyRemoved(action.agent, id),
+      ),
+    );
+
     // Decrypt + verify commitment → analyze, or force-block on tamper/decrypt failure.
-    const analysis = this.analyzeOrBlock(action, agent, allowedTargets, thresholds);
+    const analysis = this.analyzeOrBlock(action, agent, allowedTargets, thresholds, disabledPolicies);
     const result = analysis instanceof Promise ? await analysis : analysis;
 
     // Land the verdict on-chain (RelayerCap). reasoning_hash on-chain == blake3(reasoning).
@@ -181,7 +195,8 @@ export class EngineService {
     action: LeviAction,
     agent: LeviAgent,
     allowedTargets: AllowedTarget[],
-    thresholds: { escalate: number; block: number }
+    thresholds: { escalate: number; block: number },
+    disabledPolicies: ReadonlySet<string>
   ): Promise<AnalysisResult> | AnalysisResult {
     if (!this.relayerSecret) {
       // Operator fault — we cannot decrypt anything. Surface, don't punish the agent.
@@ -203,9 +218,9 @@ export class EngineService {
       );
     }
 
-    // Commitment must match the decrypted plaintext.
+    // Commitment must match the decrypted plaintext (unless the integrity policy is disabled).
     const recomputed = commitmentHash(plaintext);
-    if (!bytesEqual(recomputed, action.commitment)) {
+    if (!disabledPolicies.has(POLICY_IDS.integrity) && !bytesEqual(recomputed, action.commitment)) {
       return forcedBlock(
         `Commitment mismatch: blake3(plaintext) != on-chain commitment — payload was altered.`
       );
@@ -238,6 +253,7 @@ export class EngineService {
       allowedTargets,
       thresholds,
       knowledgeBase: this.kb.get(),
+      disabledPolicies,
     };
     return this.analyzer.analyze(input);
   }

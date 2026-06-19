@@ -14,9 +14,15 @@ export class StatsController {
   stats() {
     const actions = this.store.listActions();
     const count = (d: string) => actions.filter((a) => a.decision === d).length;
+    // Funds the firewall kept from being spent: value of everything it stopped (Blocked/Rejected).
+    const fundSavedMist = actions
+      .filter((a) => a.decision === "Blocked" || a.decision === "Rejected")
+      .reduce((sum, a) => sum + BigInt(a.value || "0"), 0n)
+      .toString();
     return {
       totalActions: actions.length,
       agents: new Set(actions.map((a) => a.agentId)).size,
+      fundSavedMist,
       byDecision: {
         Approved: count("Approved"),
         Escalated: count("Escalated"),

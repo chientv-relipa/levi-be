@@ -11,7 +11,10 @@
     "test": "vitest run",
     "set-key": "node -r @swc-node/register scripts/set-encryption-key.ts",
     "check-sponsored": "node -r @swc-node/register scripts/check-sponsored.ts",
-    "demo": "node -r @swc-node/register scripts/demo-agent.ts"
+    "demo": "node -r @swc-node/register scripts/demo-agent.ts",
+    "cleanup-agents": "node -r @swc-node/register scripts/cleanup-agents.ts",
+    "reset-activity": "node -r @swc-node/register scripts/reset-activity.ts",
+    "reset-registry": "node -r @swc-node/register scripts/reset-registry.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",

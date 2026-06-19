@@ -48,6 +48,14 @@ export class AgentsManagementController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Build an unsigned, gas-sponsored register_agent tx for the owner to sign" })
   async buildRegister(@Body() b: BuildRegisterDto) {
+    // Fail fast with a clear message instead of an on-chain MoveAbort: the registry rejects a
+    // wallet that's already registered (the on-chain entry persists even if archived off-chain).
+    const existing = await this.sui.getAgentIdByWallet(b.agentWallet);
+    if (existing) {
+      throw new BadRequestException(
+        `Agent wallet ${b.agentWallet} is already registered. Use a different wallet address.`,
+      );
+    }
     const txBytes = await this.sui.buildSponsoredRegister({
       ownerAddress: b.ownerAddress,
       agentWallet: b.agentWallet,

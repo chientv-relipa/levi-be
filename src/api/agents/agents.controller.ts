@@ -1,5 +1,20 @@
-import { BadRequestException, Controller, Get, Inject, NotFoundException, Param, Query } from "@nestjs/common";
-import { ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+} from "@nestjs/common";
+import { ApiOperation, ApiQuery, ApiSecurity, ApiTags } from "@nestjs/swagger";
+
+import { SetAgentNameDto } from "./dto/set-agent-name.dto";
+import { ArchiveAgentDto } from "./dto/archive-agent.dto";
 
 import { SuiService } from "../../sui/sui.service";
 import { RELAYER_STORE, type RelayerStore } from "../../store/store.interface";
@@ -37,16 +52,22 @@ export class AgentsController {
     };
   }
 
-  // Dashboard: agents the relayer has seen (distinct agentIds from the action log) + on-chain stats.
+  // Dashboard agent list. Without `owner`: agents the relayer has seen (distinct agentIds from the
+  // action log). With `owner`: ALL agents that wallet owns, from on-chain RegisterAgent events
+  // (incl. zero-action agents the action-log listing would miss) — this backs the "My Agents" page.
   @Get()
-  @ApiOperation({ summary: "List agents seen by the relayer (with on-chain reputation)" })
-  async listAgents() {
-    const ids = Array.from(new Set(this.store.listActions().map((a) => a.agentId))).slice(0, 50);
+  @ApiOperation({ summary: "List agents (all seen, or by ?owner=) with on-chain reputation" })
+  @ApiQuery({ name: "owner", required: false, example: "0x…" })
+  async listAgents(@Query("owner") owner?: string) {
+    const allIds = owner
+      ? await this.sui.getAgentIdsByOwner(owner)
+      : Array.from(new Set(this.store.listActions().map((a) => a.agentId))).slice(0, 50);
+    const ids = allIds.filter((id) => !this.store.isAgentArchived(id));
     const items = (
       await Promise.all(
         ids.map((id) =>
           Promise.all([this.sui.getAgent(id), this.sui.getAllowedTargets(id)])
-            .then(([a, t]) => agentView(id, a, t))
+            .then(([a, t]) => agentView(id, a, t, this.store.getAgentName(id)))
             .catch(() => null)
         )
       )
@@ -61,6 +82,26 @@ export class AgentsController {
     const a = await this.sui.getAgent(id).catch(() => null);
     if (!a) throw new NotFoundException(`agent ${id} not found`);
     const targets = await this.sui.getAllowedTargets(id);
-    return agentView(id, a, targets);
+    return agentView(id, a, targets, this.store.getAgentName(id));
+  }
+
+  // Set an agent's off-chain display name (cosmetic; the contract stores no name).
+  @Post(":id/name")
+  @HttpCode(HttpStatus.OK)
+  @ApiSecurity("x-api-key")
+  @ApiOperation({ summary: "Set an agent's off-chain display name" })
+  setAgentName(@Param("id") id: string, @Body() body: SetAgentNameDto) {
+    this.store.setAgentName(id, body.name.trim());
+    return { agentId: id, name: body.name.trim() };
+  }
+
+  // Archive/unarchive an agent off-chain (soft delete — hides it from dashboard listings).
+  @Post(":id/archive")
+  @HttpCode(HttpStatus.OK)
+  @ApiSecurity("x-api-key")
+  @ApiOperation({ summary: "Archive (hide) or unarchive an agent off-chain" })
+  archiveAgent(@Param("id") id: string, @Body() body: ArchiveAgentDto) {
+    this.store.setAgentArchived(id, body.archived);
+    return { agentId: id, archived: body.archived };
   }
 }

@@ -68,4 +68,40 @@ describe("JsonStore", () => {
     expect(s2.getAction("0xaction")?.rawScore).toBe(1500);
     expect(s2.getReasoning("hh")).toBe("persisted reasoning");
   });
+
+  it("isolates per-agent policy overlay between agents", () => {
+    const s = new JsonStore(tmpPath());
+    // Disable a guard for agent A only.
+    s.setAgentPolicyEnabled("0xA", "spend-limit-guard", false);
+    expect(s.isAgentPolicyDisabled("0xA", "spend-limit-guard")).toBe(true);
+    expect(s.isAgentPolicyDisabled("0xB", "spend-limit-guard")).toBe(false);
+    // Global overlay is independent of the per-agent one.
+    expect(s.isPolicyDisabled("spend-limit-guard")).toBe(false);
+    // Re-enable for A.
+    s.setAgentPolicyEnabled("0xA", "spend-limit-guard", true);
+    expect(s.isAgentPolicyDisabled("0xA", "spend-limit-guard")).toBe(false);
+  });
+
+  it("scopes custom policies + removed built-ins to one agent, surviving reload", () => {
+    const path = tmpPath();
+    const s1 = new JsonStore(path);
+    s1.addAgentCustomPolicy("0xA", {
+      id: "custom-1",
+      name: "My rule",
+      severity: "HIGH",
+      category: "Custom",
+      description: "",
+      rules: [],
+      createdAt: new Date().toISOString(),
+    });
+    s1.setAgentPolicyRemoved("0xA", "scam-target-guard", true);
+
+    const s2 = new JsonStore(path);
+    expect(s2.listAgentCustomPolicies("0xA").map((p) => p.id)).toEqual(["custom-1"]);
+    expect(s2.listAgentCustomPolicies("0xB")).toEqual([]);
+    expect(s2.isAgentPolicyRemoved("0xA", "scam-target-guard")).toBe(true);
+    expect(s2.isAgentPolicyRemoved("0xB", "scam-target-guard")).toBe(false);
+    expect(s2.deleteAgentCustomPolicy("0xA", "custom-1")).toBe(true);
+    expect(s2.listAgentCustomPolicies("0xA")).toEqual([]);
+  });
 });

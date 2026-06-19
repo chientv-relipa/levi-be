@@ -15,6 +15,7 @@ import {
   type Analyzer,
 } from "./analyzer.types";
 import { normalizeAddr, scamReason, matchInjection } from "./knowledge-base.util";
+import { POLICY_IDS } from "../common/policy-ids";
 
 const FLOOR = {
   scamTarget: 100_000, // known malicious target → Blocked, always
@@ -32,31 +33,38 @@ export function hardDenyFloor(input: AnalysisInput): HardFloor {
   const kb = input.knowledgeBase;
   const findings: string[] = [];
   let score = 0;
+  const off = (id: string) => input.disabledPolicies?.has(id) ?? false;
 
   const target = normalizeAddr(input.targetProgram);
   const txPackages = input.tx.moveCalls.map((m) => normalizeAddr(m.package)).filter(Boolean);
 
-  const scams = Array.from(new Set([target, ...txPackages]))
-    .map((a) => [a, scamReason(kb, a)] as const)
-    .filter(([, r]) => r);
-  if (scams.length) {
-    score = Math.max(score, FLOOR.scamTarget);
-    findings.push(`Known malicious target ${scams[0][0]}: ${scams[0][1]}`);
+  if (!off(POLICY_IDS.scamTarget)) {
+    const scams = Array.from(new Set([target, ...txPackages]))
+      .map((a) => [a, scamReason(kb, a)] as const)
+      .filter(([, r]) => r);
+    if (scams.length) {
+      score = Math.max(score, FLOOR.scamTarget);
+      findings.push(`Known malicious target ${scams[0][0]}: ${scams[0][1]}`);
+    }
   }
 
-  const inj = matchInjection(kb, input.prompt);
-  if (inj.length) {
-    score = Math.max(score, FLOOR.promptInjection);
-    findings.push(`Prompt-injection attempt against the relayer: ${inj.join("; ")}`);
+  if (!off(POLICY_IDS.promptInjection)) {
+    const inj = matchInjection(kb, input.prompt);
+    if (inj.length) {
+      score = Math.max(score, FLOOR.promptInjection);
+      findings.push(`Prompt-injection attempt against the relayer: ${inj.join("; ")}`);
+    }
   }
 
-  // Use the larger of the declared value and the amount the decoded tx actually moves.
-  const observed = input.tx.splitAmounts ?? [];
-  const observedMax = observed.reduce((m, a) => (a > m ? a : m), 0n);
-  const effectiveValue = observedMax > input.value ? observedMax : input.value;
-  if (input.agent.spendLimit > 0n && effectiveValue > input.agent.spendLimit) {
-    score = Math.max(score, FLOOR.overSpendLimit);
-    findings.push(`Value ${effectiveValue} exceeds agent spend limit ${input.agent.spendLimit}`);
+  if (!off(POLICY_IDS.spendLimit)) {
+    // Use the larger of the declared value and the amount the decoded tx actually moves.
+    const observed = input.tx.splitAmounts ?? [];
+    const observedMax = observed.reduce((m, a) => (a > m ? a : m), 0n);
+    const effectiveValue = observedMax > input.value ? observedMax : input.value;
+    if (input.agent.spendLimit > 0n && effectiveValue > input.agent.spendLimit) {
+      score = Math.max(score, FLOOR.overSpendLimit);
+      findings.push(`Value ${effectiveValue} exceeds agent spend limit ${input.agent.spendLimit}`);
+    }
   }
 
   return { score, findings };

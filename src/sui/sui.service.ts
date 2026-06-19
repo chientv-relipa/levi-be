@@ -101,6 +101,32 @@ export class SuiService {
     }
   }
 
+  /** All Agent object IDs owned by `owner`, resolved from on-chain RegisterAgent events.
+   *  Unlike the action-log listing, this includes agents that have submitted zero actions. */
+  async getAgentIdsByOwner(owner: string): Promise<string[]> {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    let cursor: EventId | null = null;
+    // RegisterAgent events are few on testnet; paginate defensively.
+    for (let page = 0; page < 20; page++) {
+      const res = await this.client.queryEvents({
+        query: { MoveEventType: `${this.pkg}::events::RegisterAgent` },
+        cursor,
+        order: "ascending",
+      });
+      for (const e of res.data) {
+        const p = e.parsedJson as { agent_id: string; agent_wallet: string; owner: string };
+        if (p.owner === owner && !seen.has(p.agent_id)) {
+          seen.add(p.agent_id);
+          ids.push(p.agent_id);
+        }
+      }
+      if (!res.hasNextPage || !res.nextCursor) break;
+      cursor = res.nextCursor;
+    }
+    return ids;
+  }
+
   async getAgent(agentId: string): Promise<LeviAgent> {
     const res = await this.client.getObject({ id: agentId, options: { showContent: true } });
     const f = contentFields(res);
@@ -498,15 +524,28 @@ export class SuiService {
   /**
    * Add the backend's sponsor signature to `txBytes` already signed by the sender, then
    * broadcast. `senderSignature` is the agent/owner signature over the same bytes.
+   *
+   * Edge case: when the sender IS the gas sponsor (e.g. the connected wallet is the relayer
+   * itself), one signature already covers both roles — adding a second, identical signature
+   * makes Sui reject it ("Expect 1 signer signatures but got 2"). So we only co-sign when the
+   * sender and the gas owner are different addresses.
    */
   async executeSponsored(
     txBytes: Uint8Array,
     senderSignature: string
   ): Promise<SuiTransactionBlockResponse> {
-    const { signature: sponsorSignature } = await this.signer.signTransaction(txBytes);
+    const data = Transaction.from(txBytes).getData();
+    const sender = data.sender ? normalizeSuiAddress(data.sender) : undefined;
+    const gasOwner = data.gasData?.owner ? normalizeSuiAddress(data.gasData.owner) : undefined;
+
+    const signature =
+      sender && gasOwner && sender === gasOwner
+        ? [senderSignature]
+        : [senderSignature, (await this.signer.signTransaction(txBytes)).signature];
+
     const res = await this.client.executeTransactionBlock({
       transactionBlock: txBytes,
-      signature: [senderSignature, sponsorSignature],
+      signature,
       options: { showEffects: true, showObjectChanges: true, showEvents: true },
     });
     await this.client.waitForTransaction({ digest: res.digest });
